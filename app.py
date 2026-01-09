@@ -85,7 +85,7 @@ def webhook():
     s_no = current_max_rows
     next_row = s_no + 1
     # --- 3. Prepare Forced Row Placement ---
-    new_row = [s_no, formatted_date, "", clean_phone, "", "Whatsapp", "", "", "", "", "", "", "", "", "", assigned_name]
+    new_row = [s_no, formatted_date, "", clean_phone, "", "Whatsapp", "", "", "", "", "", "", "", "", assigned_name]
 
     # Dynamic Row Expansion
     current_max_rows = master_sheet.row_count
@@ -112,7 +112,8 @@ def webhook():
 
         if target_sheet:
             new_row[0] = get_serial_no(target_sheet)
-            target_sheet.append_row(new_row, value_input_option='USER_ENTERED')
+            new_row[14]=""
+            target_sheet.append_row(range_name,[new_row], value_input_option='USER_ENTERED')
             print(f"✅ Updated target sheet: {target_sheet.title}")
             
     except Exception as e:
