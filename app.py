@@ -97,7 +97,7 @@ def webhook():
     range_name = f"A{next_row}:P{next_row}"
 
     try:
-        master_sheet.update(range_name, [new_row], value_input_option='USER_ENTERED')
+        master_sheet.update(new_row, value_input_option='USER_ENTERED')
         print(f"✅ Master Sheet Forced to Row {next_row}")
     except Exception as e:
         print(f"❌ Master update failed: {e}")
