@@ -47,6 +47,7 @@ def get_serial_no(sheet):
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
+    print(data)
     if 'raw_text' not in data:
         return jsonify({"status": "error", "message": "Missing raw_text"}), 400
 
