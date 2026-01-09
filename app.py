@@ -96,8 +96,10 @@ def webhook():
     # Forced update to Columns A-P to avoid horizontal displacement
     range_name = f"A{next_row}:P{next_row}"
 
+    # Wrap new_row in [] to make it a 2D list for the .update() method
     try:
-        master_sheet.update(new_row, value_input_option='USER_ENTERED')
+        # Note: We pass the range first, then the 2D list
+        master_sheet.update(range_name, [new_row], value_input_option='USER_ENTERED')
         print(f"✅ Master Sheet Forced to Row {next_row}")
     except Exception as e:
         print(f"❌ Master update failed: {e}")
@@ -113,8 +115,10 @@ def webhook():
 
         if target_sheet:
             new_row[0] = get_serial_no(target_sheet)
-            new_row[14]=""
-            target_sheet.append_row(range_name,[new_row], value_input_option='USER_ENTERED')
+            new_row[14] = ""  # Clear assigned name for individual sheets
+            
+            # Corrected: Remove 'range_name' from append_row. Just pass the list.
+            target_sheet.append_row(new_row, value_input_option='USER_ENTERED')
             print(f"✅ Updated target sheet: {target_sheet.title}")
             
     except Exception as e:
