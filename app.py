@@ -47,82 +47,90 @@ def get_serial_no(sheet):
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    print(data)
-    if 'raw_text' not in data:
+    if not data or 'raw_text' not in data:
         return jsonify({"status": "error", "message": "Missing raw_text"}), 400
 
     raw_text = data.get('raw_text', '')
     assigned_name = data.get('assigned_to', 'Not Assigned')
     
-    # --- 1. Updated Phone Extraction (Supports India +91 and US +1) ---
-    # This pattern catches numbers with spaces, parentheses, and dashes
+    # 1. Extraction
     phone_pattern = r'(\+?\d{1,3}[\s\d\-\(\)]{10,16})'
     match = re.search(phone_pattern, raw_text)
-    
     if not match:
         return jsonify({"status": "error", "message": "No phone number found"}), 400
     
-    # Keep digits and the plus sign for the sheet
     clean_phone = "".join(filter(lambda x: x.isdigit() or x == '+', match.group(0)))
-    formatted_date = get_formatted_date(raw_text)
+    
+    # Create both versions for searching to handle the + mismatch
+    phone_with_plus = clean_phone if clean_phone.startswith('+') else "+" + clean_phone
+    phone_no_plus = clean_phone.replace('+', '')
 
-    # 1. Master Sheet Connection
+    # 2. Connect to Master Sheet
     master_sheet = client.open(sheet_name).get_worksheet(0)
-    current_max_rows = master_sheet.row_count
 
-    # 2. Optimized Duplicate Check (Look at last 500 rows only)
-    # This is MUCH faster than reading the whole column
-    start_row = max(1, current_max_rows - 500)
-    check_range = f"D{start_row}:D{current_max_rows}"
-    recent_numbers = master_sheet.get(check_range)
-    # Flatten list of lists to a simple list
-    recent_numbers_list = [item[0] for item in recent_numbers if item]
-
-    if clean_phone in recent_numbers_list:
-        return jsonify({"status": "ignored", "message": "Recent Duplicate"}), 200
-
-    # 3. Faster S.No Logic (Just use row count instead of reading Col A)
-    # If your sheet is clean, Row Count is a faster proxy for S.No
-    s_no = current_max_rows
-    next_row = s_no + 1
-    # --- 3. Prepare Forced Row Placement ---
-    new_row = [s_no, formatted_date, "", clean_phone, "", "Whatsapp", "", "", "", "", "", "", "", "", assigned_name]
-
-    # Dynamic Row Expansion
-    current_max_rows = master_sheet.row_count
-    if next_row > current_max_rows:
-        master_sheet.add_rows(next_row - current_max_rows)
-
-    # Forced update to Columns A-P to avoid horizontal displacement
-    range_name = f"A{next_row}:P{next_row}"
-
-    # Wrap new_row in [] to make it a 2D list for the .update() method
+    # 3. HIGH PERFORMANCE DUPLICATE CHECK (Using find)
+    # We search specifically in Column D (index 4)
     try:
-        # Note: We pass the range first, then the 2D list
-        master_sheet.update(range_name, [new_row], value_input_option='USER_ENTERED')
-        print(f"✅ Master Sheet Forced to Row {next_row}")
+        # Check version 1: With Plus
+        dup = master_sheet.find(phone_with_plus, in_column=4)
+        if not dup:
+            # Check version 2: Without Plus
+            dup = master_sheet.find(phone_no_plus, in_column=4)
+        
+        if dup:
+            print(f"⏭️ Duplicate found at Row {dup.row}. Skipping.")
+            return jsonify({"status": "ignored", "message": "Duplicate found"}), 200
+    except gspread.exceptions.CellNotFound:
+        pass
+
+    # 4. Preparation for Update
+    formatted_date = get_formatted_date(raw_text)
+    
+    # Finding actual end of data to avoid Grid Limit errors
+    # col_values is necessary once to find the true 'next' row
+    actual_last_row = len(master_sheet.col_values(4)) 
+    next_row = actual_last_row + 1
+    current_grid_rows = master_sheet.row_count
+
+    # 5. Dynamic Grid Expansion
+    if next_row > current_grid_rows:
+        master_sheet.add_rows(1)
+            
+    # Prepare the new row data (S.No is actual_last_row because of header)
+    new_row = [actual_last_row, formatted_date, "", clean_phone, "", "Whatsapp", "", "", "", "", "", "", "", "", assigned_name]
+
+    # 6. Update using Named Arguments (Fixes Deprecation and 400 Errors)
+    try:
+        range_name = f"A{next_row}:P{next_row}"
+        master_sheet.update(
+            values=[new_row], 
+            range_name=range_name, 
+            value_input_option='USER_ENTERED'
+        )
+        print(f"✅ Master Sheet updated: Row {next_row}")
     except Exception as e:
         print(f"❌ Master update failed: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-    # --- 4. Target Sheet Logic ---
+     # 6. Optimized Target Sheet Logic
     try:
-        if "Anuhya" in assigned_name:
-            target_sheet = client.open(sheet_name).worksheet("Anuhya Leads")
-        elif "Dattu" in assigned_name:
-            target_sheet = client.open(sheet_name).worksheet("Dattu's leads")
-        else:
-            target_sheet = None
+        target_name = None
+        if "Dattu" in assigned_name:
+            target_name = "Dattu's leads"
 
-        if target_sheet:
+        if target_name:
+            target_sheet = client.open(sheet_name).worksheet(target_name)
+            # Use append_row for target sheets as they are usually smaller
             new_row[0] = get_serial_no(target_sheet)
-            new_row[14] = ""  # Clear assigned name for individual sheets
-            
-            # Corrected: Remove 'range_name' from append_row. Just pass the list.
+            new_row[14] = ""
             target_sheet.append_row(new_row, value_input_option='USER_ENTERED')
-            print(f"✅ Updated target sheet: {target_sheet.title}")
-            
+            print(f"✅ Target sheet '{target_name}' updated.")
+
+           
+
     except Exception as e:
-        print(f"Error updating target sheet: {e}")
+
+        print(f"⚠️ Target sheet error: {e}")
     
     return jsonify({"status": "success"}), 200
 
