@@ -4,20 +4,30 @@ import dateparser
 from datetime import datetime
 import gspread
 import os
+import logging
 from oauth2client.service_account import ServiceAccountCredentials
+
+# --- CONFIGURATION ---
+SPREADSHEET_ID = "1kIRrGLSWxlhh3GgmUK0l6AgyEOqwnydgawQAlycJG4Y"
+
+# Setup high-visibility logging for Render
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S'
+)
+logger = logging.getLogger("LeadTracker")
 
 app = Flask(__name__)
 
-# 1. Define the scope and authorize once
+# Google Auth - Initialize once to save time
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "creds.json")
 creds = ServiceAccountCredentials.from_json_keyfile_name(path, scope)
 client = gspread.authorize(creds)
 
-# CHANGE THIS: Use the ID from your browser URL (the long string of letters/numbers)
-SPREADSHEET_ID = "1kIRrGLSWxlhh3GgmUK0l6AgyEOqwnydgawQAlycJG4Y"
-
 def get_formatted_date(raw_text):
+    """Extracts and formats date from raw text."""
     date_keywords = r'(Yesterday|Today|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|\w{3}, \d{1,2} \w{3})'
     date_match = re.search(date_keywords, raw_text, re.IGNORECASE)
     now = datetime.now()
@@ -32,53 +42,64 @@ def get_formatted_date(raw_text):
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    logger.info(">>> Incoming Request Received")
     data = request.get_json()
+    
     if not data or 'raw_text' not in data:
+        logger.error("!!! Failure: No raw_text provided in payload")
         return jsonify({"status": "error", "message": "Missing raw_text"}), 400
 
     raw_text = data.get('raw_text', '')
     assigned_name = data.get('assigned_to', 'Not Assigned')
-    
+    logger.info(f"--- Processing for: {assigned_name} ---")
+
     # 1. Phone Extraction
     phone_pattern = r'(\+?\d{1,3}[\s\d\-\(\)]{10,16})'
     match = re.search(phone_pattern, raw_text)
     if not match:
+        logger.warning("!!! Failure: Could not find a phone number in text")
         return jsonify({"status": "error", "message": "No phone number found"}), 400
     
     clean_phone = "".join(filter(lambda x: x.isdigit() or x == '+', match.group(0)))
+    logger.info(f"Target Phone: {clean_phone}")
 
     try:
-        # 2. Open Spreadsheet ONCE (Using ID is much faster than Name)
+        # 2. Connect once
+        logger.info("Connecting to Google Sheets via ID...")
         doc = client.open_by_key(SPREADSHEET_ID)
         master_sheet = doc.get_worksheet(0)
 
-        # 3. Fast Duplicate Check (Searching Column D only)
+        # 3. Speed Check for Duplicates
+        logger.info(f"Searching Column D for {clean_phone}...")
         try:
             if master_sheet.find(clean_phone, in_column=4):
-                print(f"⏭️ Duplicate {clean_phone} found. Skipping.")
-                return jsonify({"status": "ignored", "message": "Duplicate found"}), 200
+                logger.info(f"MATCH FOUND: {clean_phone} is a duplicate. Ending process.")
+                return jsonify({"status": "ignored", "message": "Duplicate"}), 200
         except gspread.exceptions.CellNotFound:
-            pass
+            logger.info("No duplicate found. Proceeding with update.")
 
-        # 4. Prepare Row Data
+        # 4. Prepare Data
         formatted_date = get_formatted_date(raw_text)
-        # We leave S.No (index 0) empty or use a formula; append_row is very fast.
+        # Using a blank string for S.No as append_row adds it to the end
         new_row = ["", formatted_date, "", clean_phone, "", "Whatsapp", "", "", "", "", "", "", "", "", assigned_name]
 
-        # 5. Fast Update using append_row
+        # 5. Fast Update
+        logger.info("Appending row to Master Sheet...")
         master_sheet.append_row(new_row, value_input_option='USER_ENTERED')
-        print(f"✅ Master Sheet updated for {clean_phone}")
+        logger.info("MASTER SHEET SUCCESS")
 
-        # 6. Target Sheet Update (re-using the 'doc' connection)
+        # 6. Target Sheet Logic
         if "Dattu" in assigned_name:
+            logger.info("Route detected: Dattu's leads. Updating secondary sheet...")
             target_sheet = doc.worksheet("Dattu's leads")
             target_sheet.append_row(new_row, value_input_option='USER_ENTERED')
-            print("✅ Target sheet updated.")
+            logger.info("TARGET SHEET SUCCESS")
 
+        logger.info(">>> Request Completed Successfully")
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
-        print(f"❌ Error: {e}")
+        logger.error(f"CRITICAL ERROR: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == "__main__":
