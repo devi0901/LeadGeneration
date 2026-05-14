@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 import re
 import dateparser
-from datetime import datetime
+from datetime import datetime, timedelta
 import gspread
 import os
 import logging
@@ -28,9 +28,11 @@ client = gspread.authorize(creds)
 
 def get_formatted_date(raw_text):
     """Extracts and formats date from raw text."""
-    date_keywords = r'(Yesterday|Today|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|\w{3}, \d{1,2} \w{3})'
+    date_keywords = r'(Yesterday|Today|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|\w{3}, \d{1,2} \w{3}|\d{1,2}\s\w{3}\s\d{4})'
     date_match = re.search(date_keywords, raw_text, re.IGNORECASE)
-    now = datetime.now()
+    now_utc = datetime.utcnow()
+    ist_offset = timedelta(hours=5, minutes=30)
+    now = now_utc + ist_offset
     
     if date_match:
         raw_date_str = date_match.group(0)
@@ -88,12 +90,6 @@ def webhook():
         master_sheet.append_row(new_row, value_input_option='USER_ENTERED')
         logger.info("MASTER SHEET SUCCESS")
 
-        # 6. Target Sheet Logic
-        if "Dattu" in assigned_name:
-            logger.info("Route detected: Dattu's leads. Updating secondary sheet...")
-            target_sheet = doc.worksheet("Dattu's leads")
-            target_sheet.append_row(new_row, value_input_option='USER_ENTERED')
-            logger.info("TARGET SHEET SUCCESS")
 
         logger.info(">>> Request Completed Successfully")
         return jsonify({"status": "success"}), 200
